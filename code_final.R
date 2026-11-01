@@ -21,6 +21,9 @@ library(ggrepel)
 library(vegan)
 library(car)
 library(multcomp)
+library(lme4)
+library(lmerTest)
+library(emmeans)
 library(sf)
 library(rnaturalearth)
 
@@ -146,65 +149,81 @@ boxplot(bd)
 
 # Egg size analysis ####
 
-## Mean per parasite ####
+## Data ####
 
-eggs_loc <- eggs |>
+eggs_raw <- eggs |>
   rename(length = 4, width = 5) |>
+  mutate(Location = factor(Location, levels = loc_levels))
+
+eggs_loc <- eggs_raw |>
   group_by(Haplogroup, `Parasite ID`, Location) |>
   summarise(mean_length = mean(length, na.rm = TRUE),
             mean_width  = mean(width,  na.rm = TRUE),
             n_eggs      = n(),
-            .groups = "drop") |>
-  mutate(Location = factor(Location, levels = loc_levels))
+            .groups = "drop")
 
-## Linear models ####
+## Mixed model ####
 
-m_loc <- lm(mean_length ~ Location, data = eggs_loc)
-Anova(m_loc)
-
-m_full <- lm(mean_length ~ Location + Haplogroup, data = eggs_loc)
-Anova(m_full, type = 2)
-confint(m_full)["HaplogroupHg2", ]
+m_mix <- lmer(length ~ Location + (1 | `Parasite ID`), data = eggs_raw)
 
 ## Model diagnostics ####
 
-egg_diag <- broom::augment(m_loc)
+mix_diag <- eggs_raw |>
+  mutate(.fitted    = fitted(m_mix),
+         .std.resid = resid(m_mix, scaled = TRUE))
 
-ggplot(data = egg_diag, aes(x = 1:nrow(egg_diag), y = .cooksd)) +
-  geom_bar(stat = "identity") +
-  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
-  labs(x = "Observation", y = "Cook's distance")
-
-ggplot(data = egg_diag, aes(x = .fitted, y = .std.resid)) +
+ggplot(data = mix_diag, aes(x = .fitted, y = .std.resid)) +
   geom_jitter(width = 0.3, height = 0) +
   geom_hline(yintercept = 0) +
   geom_hline(yintercept = c(-2, 2), linetype = "dashed", color = "grey50") +
   labs(x = "Fitted values", y = "Standardized residuals")
 
-ggplot(data = egg_diag, aes(x = Location, y = .std.resid)) +
+ggplot(data = mix_diag, aes(x = Location, y = .std.resid)) +
   geom_boxplot() +
   geom_hline(yintercept = 0) +
   labs(y = "Standardized residuals")
 
-qqPlot(m_loc, id = FALSE)
+qqPlot(resid(m_mix, scaled = TRUE), id = FALSE)
+qqPlot(ranef(m_mix)$`Parasite ID`[, 1], id = FALSE)
 
-leveneTest(mean_length ~ Location, data = eggs_loc)
+leveneTest(.std.resid ~ Location, data = mix_diag)
+
+infl_worm <- influence(m_mix, groups = "Parasite ID")
+cd_worm <- as.matrix(cooks.distance(infl_worm))
+
+ggplot(data.frame(worm = rownames(cd_worm), cd = cd_worm[, 1]),
+       aes(x = worm, y = cd)) +
+  geom_col() +
+  geom_hline(yintercept = 4 / nrow(cd_worm), linetype = "dashed", color = "red") +
+  labs(x = "Parasite ID", y = "Cook's distance") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+
+mix_diag[abs(mix_diag$.std.resid) > 3, ]
+
+## Model results ####
+
+anova(m_mix)
+summary(m_mix)
+
+m_mix_full <- lmer(length ~ Location + Haplogroup + (1 | `Parasite ID`), data = eggs_raw)
+anova(m_mix_full)
+confint(m_mix_full, parm = "HaplogroupHg2")
 
 ## Post-hoc ####
 
-m_pht <- glht(m_loc, linfct = mcp(Location = "Tukey"))
-summary(m_pht)
+emm_loc <- emmeans(m_mix, ~ Location, lmer.df = "satterthwaite")
+pairs(emm_loc, adjust = "tukey")
 
-cld_pht <- cld(m_pht)
-letters_df <- data.frame(Location = names(cld_pht$mcletters$Letters),
-                         .group   = cld_pht$mcletters$Letters)
+cld_mix <- cld(emm_loc, Letters = letters, adjust = "tukey")
 
 ## Plot ####
 
-MyData <- data.frame(Location = factor(loc_levels, levels = loc_levels))
-Predictions <- predict(m_loc, newdata = MyData, interval = "confidence")
-MyData <- data.frame(MyData, Predictions) |>
-  left_join(letters_df, by = "Location")
+MyData <- as.data.frame(emm_loc) |>
+  dplyr::select(Location, fit = emmean, lwr = lower.CL, upr = upper.CL) |>
+  left_join(as.data.frame(cld_mix) |>
+              dplyr::select(Location, .group) |>
+              mutate(.group = trimws(.group)),
+            by = "Location")
 
 y_top <- max(eggs_loc$mean_length) + 3
 
@@ -216,7 +235,7 @@ gg_means <- ggplot(eggs_loc, aes(x = Location, y = mean_length, color = Location
   geom_text_repel(aes(label = `Parasite ID`),
                   position = pos_j, size = 2.5, max.overlaps = Inf,
                   min.segment.length = 0, segment.size = 0.2,
-                  show.legend = FALSE) +
+                  seed = 42, show.legend = FALSE) +
   geom_pointrange(data = MyData, aes(y = fit, ymin = lwr, ymax = upr),
                   position = position_nudge(x = 0.25),
                   size = 0.6, linewidth = 1) +
@@ -231,7 +250,6 @@ gg_means <- ggplot(eggs_loc, aes(x = Location, y = mean_length, color = Location
         legend.position = "top")
 
 gg_means
-
 # Combined figure ####
 
 p_combined <- p_scores +
