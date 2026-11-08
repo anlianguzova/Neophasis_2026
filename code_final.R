@@ -61,7 +61,7 @@ selection_ref <- c(haplogroup = "Haplogroup",
                    ph_l = "Ph, l",
                    ph_w = "Ph, w (mid)")
 
-mar_ref <- maritae |> dplyr::select(all_of(selection_ref)) |> as.data.frame()
+mar_ref <- maritae %>%  dplyr::select(all_of(selection_ref)) %>%  as.data.frame()
 rownames(mar_ref) <- mar_ref$id
 
 ## Transformation ####
@@ -78,18 +78,18 @@ mar_cent <- t(apply(mar_trans, 1, center))
 pca_mar <- rda(mar_cent, scale = FALSE)
 summary(pca_mar)
 
-pca_scores   <- as.data.frame(scores(pca_mar, display = "sites",   choices = 1:2, scaling = 1))
+pca_scores   <- as.data.frame(scores(pca_mar, display = "sites", choices = 1:2, scaling = 1))
 pca_loadings <- as.data.frame(scores(pca_mar, display = "species", choices = 1:2, scaling = 2))
 
 var_exp <- eigenvals(pca_mar)[1:2] / sum(eigenvals(pca_mar)) * 100
 
 pca_scores$haplogroup <- mar_ref$haplogroup
-pca_scores$location   <- mar_ref$location
-pca_scores$region     <- mar_ref$region
-pca_scores$id         <- mar_ref$id
+pca_scores$location <- mar_ref$location
+pca_scores$region <- mar_ref$region
+pca_scores$id <- mar_ref$id
 
-centroids <- pca_scores |>
-  group_by(region) |>
+centroids <- pca_scores %>%
+  group_by(region) %>%
   summarise(PC1 = mean(PC1), PC2 = mean(PC2))
 
 ## Plots ####
@@ -151,15 +151,15 @@ boxplot(bd)
 
 ## Data ####
 
-eggs_raw <- eggs |>
-  rename(length = 4, width = 5) |>
+eggs_raw <- eggs %>%
+  rename(length = 4, width = 5) %>%
   mutate(Location = factor(Location, levels = loc_levels))
 
-eggs_loc <- eggs_raw |>
-  group_by(Haplogroup, `Parasite ID`, Location) |>
+eggs_loc <- eggs_raw %>%
+  group_by(Haplogroup, `Parasite ID`, Location) %>%
   summarise(mean_length = mean(length, na.rm = TRUE),
-            mean_width  = mean(width,  na.rm = TRUE),
-            n_eggs      = n(),
+            mean_width = mean(width,  na.rm = TRUE),
+            n_eggs = n(),
             .groups = "drop")
 
 ## Mixed model ####
@@ -169,7 +169,7 @@ m_mix <- lmer(length ~ Location + (1 | `Parasite ID`), data = eggs_raw)
 ## Model diagnostics ####
 
 mix_diag <- eggs_raw |>
-  mutate(.fitted    = fitted(m_mix),
+  mutate(.fitted = fitted(m_mix),
          .std.resid = resid(m_mix, scaled = TRUE))
 
 ggplot(data = mix_diag, aes(x = .fitted, y = .std.resid)) +
@@ -218,10 +218,10 @@ cld_mix <- cld(emm_loc, Letters = letters, adjust = "tukey")
 
 ## Plot ####
 
-MyData <- as.data.frame(emm_loc) |>
-  dplyr::select(Location, fit = emmean, lwr = lower.CL, upr = upper.CL) |>
-  left_join(as.data.frame(cld_mix) |>
-              dplyr::select(Location, .group) |>
+MyData <- as.data.frame(emm_loc) %>%
+  dplyr::select(Location, fit = emmean, lwr = lower.CL, upr = upper.CL) %>%
+  left_join(as.data.frame(cld_mix) %>%
+              dplyr::select(Location, .group) %>%
               mutate(.group = trimws(.group)),
             by = "Location")
 
@@ -250,6 +250,7 @@ gg_means <- ggplot(eggs_loc, aes(x = Location, y = mean_length, color = Location
         legend.position = "top")
 
 gg_means
+
 # Combined figure ####
 
 p_combined <- p_scores +
@@ -272,64 +273,71 @@ ggsave("images/mar_pca_eggs.pdf", p_combined, width = 14, height = 8, units = "i
 
 # Mantel test ####
 
+## Coordinates ####
+
+sites <- data.frame(pop = c("East_Siberian_Sea", "East_Kamchatka", "White_Sea", "Pechora_Sea",
+                            "Barents_Sea", "Sea_of_Japan", "Sea_of_Okhotsk"),
+                    lat = c(68 + 54/60, 52 + 47/60, 65 + 2/60, 69 + 50/60,
+                            69 + 6/60,  42 + 46/60, 59 + 31/60),
+                    lon = c(170 + 39/60, 158 + 37/60, 35 + 42/60, 59 + 24/60,
+                            36 + 3/60,   132 + 56/60, 150 + 45/60))
+
 ## Distance matrices ####
 
-pops <- c("East_Siberian_Sea", "East_Kamchatka", "WS",
-          "Pechora_Sea", "Barents_Sea", "Sea_of_Japan")
-
-# builds a symmetric matrix from a row-wise lower triangle incl. diagonal
-tri_to_sym <- function(vals, labels) {
+read_meg <- function(file) {
+  lines  <- trimws(readLines(file))
+  labels <- sub("^#", "", grep("^#(?!mega)", lines, value = TRUE, perl = TRUE))
+  labels <- dplyr::recode(labels, WS = "White_Sea", Kamchatka = "East_Kamchatka",
+                          Easr_Siberin_Sea = "East_Siberian_Sea")
+  vals <- as.numeric(unlist(strsplit(grep("^[-0-9]", lines, value = TRUE), "\\s+")))
   n <- length(labels)
-  stopifnot(length(vals) == n * (n + 1) / 2)
   m <- matrix(0, n, n, dimnames = list(labels, labels))
-  m[upper.tri(m, diag = TRUE)] <- vals
+  m[upper.tri(m)] <- vals
   m[lower.tri(m)] <- t(m)[lower.tri(m)]
+  pmax(m, 0)
+}
+
+geo_matrix <- function(pops) {
+  m <- sites[match(pops, sites$pop), ] %>%
+    st_as_sf(coords = c("lon", "lat"), crs = 4326) %>%
+    st_distance() %>%
+    units::set_units("km") %>%
+    units::drop_units()
+  dimnames(m) <- list(pops, pops)
   m
 }
 
-fst_matrix <- tri_to_sym(c(
-  0.00000,
-  0.00140, 0.00000,
-  0.49371, 0.49244, 0.00000,
-  0.23264, 0.23341, 0.36251, 0.00000,
-  0.46377, 0.46667, 0.70653, 0.12698, 0.00000,
-  0.19048, 0.22533, 0.51267, 0.33054, 0.58915, 0.00000
-), pops)
+fst_files <- c("All haplogroups" = "data/oculata_all_4_haplogroups_pairwise_Fst.meg",
+               "Hg1 + Hg2" = "data/oculata_hg1_hg2_pairwise_Fst.meg",
+               "Hg1" = "data/oculata_hg1_pairwise_Fst.meg")
 
-geo_matrix <- tri_to_sym(c(
-  0,
-  2116, 0,
-  4390, 5860, 0,
-  4081, 5572, 1180, 0,
-  4413, 5640,  592,  868, 0,
-  3086, 1889, 6631, 6307, 6459, 0
-), pops)
-
-fst_dist <- as.dist(fst_matrix)
-geo_dist <- as.dist(geo_matrix)
+fst_list <- lapply(fst_files, read_meg)
+geo_list <- lapply(fst_list, function(m) geo_matrix(rownames(m)))
 
 ## Test ####
 
-mantel_result <- mantel(fst_dist, geo_dist, method = "pearson", permutations = 10000)
-mantel_result
+mantel_list <- Map(function(f, g) mantel(as.dist(f), as.dist(g), method = "pearson", permutations = 9999),
+                   fst_list, geo_list)
+mantel_list
 
 ## Plot ####
 
-plot_df <- data.frame(geographic_distance_km = as.vector(geo_dist),
-                      genetic_distance_FST   = as.vector(fst_dist))
+ibd_df <- bind_rows(Map(function(f, g, s) data.frame(set = s, geo_km = as.vector(as.dist(g)),
+                                                     fst = as.vector(as.dist(f))),
+                        fst_list, geo_list, names(fst_list))) %>%
+  mutate(set = factor(set, levels = names(fst_list)))
 
-p_ibd <- ggplot(plot_df, aes(x = geographic_distance_km, y = genetic_distance_FST)) +
+ibd_lab <- data.frame(set = factor(names(mantel_list), levels = names(fst_list)),
+                      label = sapply(mantel_list, function(x)
+                        sprintf("Mantel r = %.3f\np = %.3f", x$statistic, x$signif)))
+
+p_ibd <- ggplot(ibd_df, aes(x = geo_km, y = fst)) +
   geom_point(size = 3, color = "blue", alpha = 0.7) +
-  geom_smooth(method = "lm", se = TRUE, color = "red", fill = "pink") +
-  labs(title = "Isolation by Distance within Hg1+2 (N. oculata s.s.)",
-       x = "Geographic distance (km)",
-       y = expression(pairwise ~ F[ST])) +
-  annotate("text",
-           x = max(plot_df$geographic_distance_km) * 0.7,
-           y = max(plot_df$genetic_distance_FST) * 0.9,
-           label = paste("Mantel r =", round(mantel_result$statistic, 3),
-                         "\np =", round(mantel_result$signif, 3)),
-           hjust = 0, size = 4) +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, color = "red") +
+  geom_text(data = ibd_lab, aes(x = -Inf, y = Inf, label = label),
+            hjust = -0.1, vjust = 1.2, size = 3.5) +
+  facet_wrap(~ set) +
+  labs(x = "Geographic distance (km)", y = expression(pairwise ~ F[ST])) +
   theme_bw()
 
 p_ibd
@@ -340,7 +348,7 @@ p_ibd
 lon_min <- 0;  lon_max <- 205   # degrees E; 205 = 155 W, so Chukchi and Bering Seas are included
 lat_min <- 30; lat_max <- 80    # degrees N
 land_col <- "grey30"
-sea_col  <- "white"
+sea_col <- "white"
 
 crs_map <- "+proj=lcc +lat_1=40 +lat_2=70 +lat_0=60 +lon_0=100 +datum=WGS84 +units=m +no_defs" # central meridian moved east to balance the wider extent
 
