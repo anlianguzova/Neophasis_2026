@@ -168,7 +168,7 @@ m_mix <- lmer(length ~ Location + (1 | `Parasite ID`), data = eggs_raw)
 
 ## Model diagnostics ####
 
-mix_diag <- eggs_raw |>
+mix_diag <- eggs_raw %>%
   mutate(.fitted = fitted(m_mix),
          .std.resid = resid(m_mix, scaled = TRUE))
 
@@ -206,7 +206,7 @@ anova(m_mix)
 summary(m_mix)
 
 m_mix_full <- lmer(length ~ Location + Haplogroup + (1 | `Parasite ID`), data = eggs_raw)
-anova(m_mix_full)
+anova(m_mix_full, type = 2)
 confint(m_mix_full, parm = "HaplogroupHg2")
 
 ## Post-hoc ####
@@ -214,7 +214,7 @@ confint(m_mix_full, parm = "HaplogroupHg2")
 emm_loc <- emmeans(m_mix, ~ Location, lmer.df = "satterthwaite")
 pairs(emm_loc, adjust = "tukey")
 
-cld_mix <- cld(emm_loc, Letters = letters, adjust = "tukey")
+cld_mix <- cld(emm_loc, Letters = letters)
 
 ## Plot ####
 
